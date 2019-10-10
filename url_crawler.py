@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup
 
 
 async def fetch(session: aiohttp.ClientSession, url: str) -> str:
+    await asyncio.sleep(1)
     async with session.get(url) as response:
         return await response.text()
 
