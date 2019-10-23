@@ -4,9 +4,11 @@ from typing import Dict
 from typing import List
 
 import aiohttp
+from aiohttp.client_exceptions import ClientHttpProxyError
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 import requests
+import backoff
 
 from io_util import read_file, output_iterator
 import time
@@ -17,6 +19,9 @@ password = "kvKzfDamqkhGQNhYSYs6s44Hf"
 proxy_url = f"http://auto:{password}@proxy.apify.com:8000"
 
 
+@backoff.on_exception(backoff.expo,
+                      ClientHttpProxyError,
+                      max_tries=5, max_time=30)
 async def fetch(session: aiohttp.ClientSession, url: str) -> str:
     await asyncio.sleep(1e-2)
     async with session.get(url, proxy=proxy_url) as response:
@@ -142,6 +147,8 @@ async def get_chapter_summary(session, json_dict):
         if page_container and len(page_container.contents) >= 2:
             for idx in range(2, len(page_container.contents) + 1):
                 page_doc = await fetch(session, url_template.format(idx))
+                if not page_doc:
+                    continue
                 page_soup = BeautifulSoup(page_doc, "html.parser")
                 page_result = parse_chapter_summary_one_page(page_soup)
                 result = result + page_result
@@ -150,22 +157,33 @@ async def get_chapter_summary(session, json_dict):
             json_dict['summary'] = result
 
 
-async def get_chapter_summary_test(input_path):
+async def get_chapter_summary_test(input_list):
     async with aiohttp.ClientSession(headers=headers) as session:
-        coroutine_list = [asyncio.gather(*[get_chapter_summary(session, ele)
-                                           for ele in summary["chapters_url"]])
-                          for summary in input_list if
-                          "chapters_url" in summary]
-        coroutines = asyncio.wait(coroutine_list)
+        return await asyncio.wait(
+            [get_chapter_summary(session, ele) for ele in input_list])
 
-        return await coroutines
 
-if __name__ == '__main__':
-    input_path = "/Users/zxj/Google 云端硬盘/SparkNotes/book_summaries.txt"
-    input_list = list(
-        read_file(input_path, preprocess=lambda x: json.loads(x.strip())))[150: ]
+def get_chapter_summaries():
+    input_path = "/Users/zxj/Google 云端硬盘/SparkNotes/parts/book_chapter_summaries_1.txt"
+    input_list = read_file(input_path,
+                           preprocess=lambda x: json.loads(x.strip()))
+    input_list = (ele for ele in input_list if ele['chapters_url'])
+    input_list = list(input_list)
+    filtered_list = [ele for summary in input_list for ele in
+                     summary['chapters_url'] if 'summary' not in ele]
 
     loop = asyncio.get_event_loop()
-    loop.run_until_complete(get_chapter_summary_test(input_list))
-    output_path = "/Users/zxj/Google 云端硬盘/SparkNotes/book_chapter_summaries_5.txt"
+    done, pending = loop.run_until_complete(
+        get_chapter_summary_test(filtered_list))
+
+    for ele in filtered_list:
+        print(ele)
+
+    ''''
+    output_path = "/Users/zxj/Google 云端硬盘/SparkNotes/book_chapter_summaries_6.txt"
     output_iterator(output_path, input_list, process=lambda x: json.dumps(x))
+    '''
+
+
+if __name__ == '__main__':
+    get_chapter_summaries()
